@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#061018" />
+    <title>Gesture Fighter Three</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+      <canvas id="gestureTrail" aria-label="Zona de gestos"></canvas>
+      <div class="topHud">
+        <div class="fighterHud playerHud">
+          <span class="hudName">TÚ</span>
+          <div class="hp"><span id="playerHp"></span></div>
+        </div>
+        <div class="roundTitle">
+          <b>GESTURE FIGHTER</b>
+          <span>Three.js prototype</span>
+        </div>
+        <div class="fighterHud enemyHud">
+          <span class="hudName">RIVAL</span>
+          <div class="hp enemy"><span id="enemyHp"></span></div>
+        </div>
+      </div>
+      <section class="gesturePanel">
+        <div>
+          <strong id="gestureName">Dibuja un gesto</strong>
+          <span id="gestureMeta">3 + flick = Hadoken · círculo = escudo · swipe = movimiento</span>
+        </div>
+        <button id="resetBtn" type="button">Reset</button>
+      </section>
+      <aside class="helpPanel">
+        <h1>Combos por gestos</h1>
+        <p><b>Hadoken:</b> dibuja un <span>3</span>, arrastra hacia la dirección y suelta.</p>
+        <p><b>Escudo:</b> círculo cerrado.</p>
+        <p><b>Dash/Golpe:</b> swipe rápido.</p>
+      </aside>
+      <aside class="debugPanel">
+        <b>Recognizer</b>
+        <pre id="debugText">points: 0</pre>
+      </aside>
+      <div id="toast" class="toast hidden"></div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
