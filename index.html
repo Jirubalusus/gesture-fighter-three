@@ -14,10 +14,11 @@
         <div class="fighterHud playerHud">
           <span class="hudName">TÚ</span>
           <div class="hp"><span id="playerHp"></span></div>
+          <div class="energy"><span id="playerEnergy"></span></div>
         </div>
         <div class="roundTitle">
           <b>GESTURE FIGHTER</b>
-          <span>Three.js prototype</span>
+          <span id="roundState">Solo gestos · toca y dibuja</span>
         </div>
         <div class="fighterHud enemyHud">
           <span class="hudName">RIVAL</span>
@@ -27,15 +28,20 @@
       <section class="gesturePanel">
         <div>
           <strong id="gestureName">Dibuja un gesto</strong>
-          <span id="gestureMeta">3 + flick = Hadoken · círculo = escudo · swipe = movimiento</span>
+          <span id="gestureMeta">3 + flick = Hadoken · V = launcher · Z = barrido · W = combo</span>
         </div>
         <button id="resetBtn" type="button">Reset</button>
       </section>
       <aside class="helpPanel">
-        <h1>Combos por gestos</h1>
-        <p><b>Hadoken:</b> dibuja un <span>3</span>, arrastra hacia la dirección y suelta.</p>
-        <p><b>Escudo:</b> círculo cerrado.</p>
-        <p><b>Dash/Golpe:</b> swipe rápido.</p>
+        <div class="guideHeader">
+          <h1>Gestos de pelea</h1>
+          <span id="liveRead">Listo</span>
+        </div>
+        <div class="moveGrid" id="moveGuide" aria-label="Guía de gestos"></div>
+        <div class="comboBox">
+          <b>Registro</b>
+          <ol id="comboLog"></ol>
+        </div>
       </aside>
       <aside class="debugPanel">
         <b>Recognizer</b>

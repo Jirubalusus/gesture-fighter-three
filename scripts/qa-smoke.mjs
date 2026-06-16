@@ -20,6 +20,33 @@ function threePath(cx, cy, scale = 1) {
   return pts;
 }
 
+function wPath(cx, cy, scale = 1) {
+  const anchors = [
+    [cx - 95 * scale, cy - 70 * scale],
+    [cx - 48 * scale, cy + 72 * scale],
+    [cx, cy - 58 * scale],
+    [cx + 48 * scale, cy + 72 * scale],
+    [cx + 104 * scale, cy - 70 * scale],
+  ];
+  const pts = [];
+  for (let a = 0; a < anchors.length - 1; a++) {
+    const [x1, y1] = anchors[a];
+    const [x2, y2] = anchors[a + 1];
+    for (let i = 0; i < 14; i++) {
+      const k = i / 13;
+      pts.push([x1 + (x2 - x1) * k, y1 + (y2 - y1) * k]);
+    }
+  }
+  return pts;
+}
+
+async function drawPath(page, pts) {
+  await page.mouse.move(pts[0][0], pts[0][1]);
+  await page.mouse.down();
+  for (const [x, y] of pts.slice(1)) await page.mouse.move(x, y, { steps: 1 });
+  await page.mouse.up();
+}
+
 async function run(label, viewport) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1, isMobile: viewport.width < 600, hasTouch: viewport.width < 600 });
@@ -29,15 +56,18 @@ async function run(label, viewport) {
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60000 });
   await page.screenshot({ path: path.join(outDir, `${label}-initial.png`), fullPage: false });
   const pts = threePath(viewport.width * .38, viewport.height * .48, viewport.width < 600 ? .72 : 1);
-  await page.mouse.move(pts[0][0], pts[0][1]);
-  await page.mouse.down();
-  for (const [x, y] of pts.slice(1)) await page.mouse.move(x, y, { steps: 1 });
-  await page.mouse.up();
+  await drawPath(page, pts);
   await page.waitForTimeout(450);
+  const comboPts = wPath(viewport.width * .50, viewport.height * .50, viewport.width < 600 ? .62 : .88);
+  await drawPath(page, comboPts);
+  await page.waitForTimeout(350);
   const state = await page.evaluate(() => ({
     label: document.querySelector('#gestureName')?.textContent,
     meta: document.querySelector('#gestureMeta')?.textContent,
+    lastType: window.__lastGesture?.type,
+    comboText: document.querySelector('#comboLog')?.textContent,
     enemyHp: document.querySelector('#enemyHp')?.style.width,
+    energy: document.querySelector('#playerEnergy')?.style.width,
     hasCanvas: !!document.querySelector('canvas#game'),
     overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
   }));
@@ -51,4 +81,11 @@ const reports = [
   await run('mobile-390x844', { width: 390, height: 844 }),
 ];
 console.log(JSON.stringify({ outDir, reports }, null, 2));
-if (reports.some((r) => r.errors.length || !/Hadoken/i.test(r.state.label || '') || !r.state.hasCanvas || r.state.overflowX)) process.exit(1);
+if (reports.some((r) => (
+  r.errors.length ||
+  !/(Hadoken|Combo relámpago)/i.test(r.state.label || '') ||
+  !/hadoken|flurry/i.test(r.state.lastType || '') ||
+  !/Hadoken|Combo flurry|Combo relámpago/i.test(r.state.comboText || '') ||
+  !r.state.hasCanvas ||
+  r.state.overflowX
+))) process.exit(1);

@@ -1,31 +1,72 @@
 import * as THREE from 'three';
 import './styles.css';
-import { recognizeGesture } from './gestureRecognizer.js';
+import { MOVE_TYPES, recognizeGesture } from './gestureRecognizer.js';
 
 const canvas = document.querySelector('#game');
 const trailCanvas = document.querySelector('#gestureTrail');
 const trailCtx = trailCanvas.getContext('2d');
 const hpPlayerEl = document.querySelector('#playerHp');
 const hpEnemyEl = document.querySelector('#enemyHp');
+const energyPlayerEl = document.querySelector('#playerEnergy');
 const gestureName = document.querySelector('#gestureName');
 const gestureMeta = document.querySelector('#gestureMeta');
 const debugText = document.querySelector('#debugText');
 const toast = document.querySelector('#toast');
 const resetBtn = document.querySelector('#resetBtn');
+const moveGuide = document.querySelector('#moveGuide');
+const comboLog = document.querySelector('#comboLog');
+const liveRead = document.querySelector('#liveRead');
+const roundState = document.querySelector('#roundState');
+
+const MOVE_INFO = {
+  [MOVE_TYPES.HADOKEN]: { name: 'Hadoken', cost: 24, cooldown: 520, damage: 15 },
+  [MOVE_TYPES.DASH]: { name: 'Dash / esquiva', cost: 8, cooldown: 220, damage: 0 },
+  [MOVE_TYPES.UPPERCUT]: { name: 'Uppercut', cost: 18, cooldown: 420, damage: 10 },
+  [MOVE_TYPES.LOW_GUARD]: { name: 'Guardia baja', cost: 0, cooldown: 260, damage: 0 },
+  [MOVE_TYPES.JAB]: { name: 'Jab', cost: 4, cooldown: 170, damage: 5 },
+  [MOVE_TYPES.LAUNCHER]: { name: 'Patada ascendente', cost: 18, cooldown: 520, damage: 12 },
+  [MOVE_TYPES.SWEEP]: { name: 'Barrido pesado', cost: 16, cooldown: 540, damage: 11 },
+  [MOVE_TYPES.SHIELD]: { name: 'Escudo', cost: 20, cooldown: 780, damage: 0 },
+  [MOVE_TYPES.FLURRY]: { name: 'Combo flurry', cost: 30, cooldown: 850, damage: 18 },
+  [MOVE_TYPES.THROW]: { name: 'Agarre', cost: 14, cooldown: 620, damage: 14 },
+  [MOVE_TYPES.CHARGE]: { name: 'Carga', cost: 0, cooldown: 650, damage: 0 },
+};
+
+const GUIDE = [
+  ['3→', 'Hadoken', 'M 16 14 C 52 2 56 38 24 38 C 60 38 62 78 18 70 L 76 70'],
+  ['—', 'Dash', 'M 12 45 L 74 45'],
+  ['↑', 'Uppercut', 'M 42 74 L 42 16'],
+  ['↓', 'Guardia baja', 'M 42 16 L 42 74'],
+  ['·', 'Jab', 'M 18 45 L 48 43'],
+  ['V', 'Launcher', 'M 16 16 L 42 72 L 74 18'],
+  ['Z', 'Barrido', 'M 14 18 L 74 18 L 18 72 L 76 72'],
+  ['O', 'Escudo', 'M 44 14 C 82 14 82 76 44 76 C 6 76 6 14 44 14'],
+  ['W', 'Flurry', 'M 10 16 L 26 72 L 42 20 L 58 72 L 76 16'],
+  ['L', 'Agarre', 'M 22 14 L 22 72 L 72 72'],
+  ['hold', 'Carga', 'M 44 44 m -20 0 a 20 20 0 1 0 40 0 a 20 20 0 1 0 -40 0'],
+];
 
 const state = {
   playerHp: 100,
   enemyHp: 100,
-  playerX: -3.2,
-  enemyX: 3.2,
-  shieldUntil: 0,
-  enemyCooldown: 1.2,
+  energy: 76,
+  playerBaseX: -2.8,
+  enemyBaseX: 2.75,
   projectiles: [],
   impacts: [],
+  floaters: [],
   points: [],
   drawing: false,
   lastActionAt: 0,
   gameOver: false,
+  shieldUntil: 0,
+  lowGuardUntil: 0,
+  chargeUntil: 0,
+  enemyCooldown: 1.0,
+  enemyStun: 0,
+  enemyVy: 0,
+  cooldowns: new Map(),
+  combo: [],
 };
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
@@ -34,22 +75,26 @@ renderer.shadowMap.enabled = true;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x061018);
 scene.fog = new THREE.Fog(0x061018, 8, 18);
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-camera.position.set(0, 4.3, 9.2);
-camera.lookAt(0, 1.05, 0);
+const camera = new THREE.PerspectiveCamera(44, 1, 0.1, 100);
 
-const hemi = new THREE.HemisphereLight(0x88ffcc, 0x05070d, 1.6);
+const hemi = new THREE.HemisphereLight(0x9bf7d5, 0x060811, 1.45);
 scene.add(hemi);
-const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.15);
 keyLight.position.set(-3, 7, 5);
 keyLight.castShadow = true;
 scene.add(keyLight);
-const rim = new THREE.PointLight(0x22ff99, 2.2, 10);
-rim.position.set(0, 2.5, -2.4);
+const rim = new THREE.PointLight(0x23f8c2, 2.0, 11);
+rim.position.set(0, 2.5, -2.6);
 scene.add(rim);
 
 function mat(color, emissive = 0x000000, intensity = 0.08) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.42, metalness: 0.08, emissive, emissiveIntensity: intensity });
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.42,
+    metalness: 0.08,
+    emissive,
+    emissiveIntensity: intensity,
+  });
 }
 
 const floor = new THREE.Mesh(new THREE.BoxGeometry(10, 0.14, 4.2), mat(0x102134, 0x061018, 0.2));
@@ -88,103 +133,307 @@ function makeFighter(color, accent, side = 1) {
   rightArm.rotation.z = -0.95 * side;
   group.add(rightArm);
   const legGeo = new THREE.CapsuleGeometry(0.11, 0.78, 6, 10);
-  const l1 = new THREE.Mesh(legGeo, mat(0x111827, accent, 0.08));
-  l1.position.set(-0.18, 0.42, 0);
-  l1.castShadow = true;
-  group.add(l1);
-  const l2 = l1.clone(); l2.position.x = 0.18; group.add(l2);
+  const leftLeg = new THREE.Mesh(legGeo, mat(0x111827, accent, 0.08));
+  leftLeg.position.set(-0.18, 0.42, 0);
+  leftLeg.castShadow = true;
+  group.add(leftLeg);
+  const rightLeg = leftLeg.clone();
+  rightLeg.position.x = 0.18;
+  group.add(rightLeg);
   const aura = new THREE.Mesh(new THREE.TorusGeometry(0.68, 0.025, 8, 72), mat(accent, accent, 1));
   aura.position.y = 0.72;
   aura.rotation.x = Math.PI / 2;
   aura.material.transparent = true;
   aura.material.opacity = 0;
   group.add(aura);
-  group.userData = { body, aura, baseY: 0 };
+  group.userData = { body, head, leftArm, rightArm, leftLeg, rightLeg, aura, punch: 0, kick: 0, flash: 0, side };
   return group;
 }
 
 const player = makeFighter(0x246bff, 0x22f3ff, 1);
 const enemy = makeFighter(0xff365f, 0xffb020, -1);
-player.position.x = state.playerX;
-enemy.position.x = state.enemyX;
+player.position.x = state.playerBaseX;
+enemy.position.x = state.enemyBaseX;
 scene.add(player, enemy);
 
-function makeProjectile(x, y, dir, owner = 'player') {
-  const color = owner === 'player' ? 0x41f6ff : 0xff9f1c;
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.18, 24, 16), mat(color, color, 1.8));
-  mesh.position.set(x, y, 0);
-  mesh.castShadow = true;
-  scene.add(mesh);
-  const light = new THREE.PointLight(color, 2.2, 3.5);
-  mesh.add(light);
-  const speed = owner === 'player' ? 5.9 : 3.9;
-  state.projectiles.push({ mesh, dir: { x: dir.x, y: -dir.y * 0.35 }, owner, speed, life: 2.4 });
+function renderGuide() {
+  moveGuide.innerHTML = GUIDE.map(([glyph, name, path]) => `
+    <div class="moveChip">
+      <svg viewBox="0 0 88 88" aria-hidden="true">
+        <path d="${path}" pathLength="100"></path>
+      </svg>
+      <span>${glyph}</span>
+      <b>${name}</b>
+    </div>
+  `).join('');
+}
+renderGuide();
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function signedDir(direction) {
+  if (direction.label === 'izquierda') return -1;
+  if (direction.label === 'derecha') return 1;
+  return enemy.position.x >= player.position.x ? 1 : -1;
+}
+
+function fighterDistance() {
+  return Math.abs(enemy.position.x - player.position.x);
+}
+
+function addImpact(x, y, color = 0x41f6ff, size = 0.34) {
+  state.impacts.push({ x, y, life: 0.45, color, size });
+}
+
+function addFloatingText(text, x, y, color = '#d9fff3') {
+  state.floaters.push({ text, x, y, life: 0.85, color });
 }
 
 function showToast(text) {
   toast.textContent = text;
   toast.classList.remove('hidden');
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => toast.classList.add('hidden'), 900);
+  showToast.timer = setTimeout(() => toast.classList.add('hidden'), 820);
+}
+
+function logCombo(text) {
+  state.combo.unshift(text);
+  state.combo = state.combo.slice(0, 5);
+  comboLog.innerHTML = state.combo.map((item) => `<li>${item}</li>`).join('');
 }
 
 function resetGame() {
-  state.playerHp = 100; state.enemyHp = 100; state.gameOver = false;
+  state.playerHp = 100;
+  state.enemyHp = 100;
+  state.energy = 76;
+  state.gameOver = false;
+  state.shieldUntil = 0;
+  state.lowGuardUntil = 0;
+  state.chargeUntil = 0;
+  state.enemyCooldown = 1.0;
+  state.enemyStun = 0;
+  state.enemyVy = 0;
+  state.cooldowns.clear();
+  state.combo = [];
+  comboLog.innerHTML = '';
   for (const p of state.projectiles) scene.remove(p.mesh);
-  state.projectiles = []; state.impacts = [];
-  player.position.x = state.playerX; enemy.position.x = state.enemyX;
+  for (const im of state.impacts) if (im.mesh) scene.remove(im.mesh);
+  for (const fl of state.floaters) if (fl.el) fl.el.remove();
+  state.projectiles = [];
+  state.impacts = [];
+  state.floaters = [];
+  player.position.set(state.playerBaseX, 0, 0);
+  enemy.position.set(state.enemyBaseX, 0, 0);
+  gestureName.textContent = 'Dibuja un gesto';
+  gestureMeta.textContent = '3 + flick = Hadoken · V = launcher · Z = barrido · W = combo';
+  roundState.textContent = 'Solo gestos · toca y dibuja';
   showToast('Combate reiniciado');
 }
 resetBtn.addEventListener('click', resetGame);
 
-function actionFromGesture(result) {
-  const now = performance.now();
+function makeProjectile(x, y, direction, owner = 'player', power = 1) {
+  const color = owner === 'player' ? 0x41f6ff : 0xff9f1c;
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.17 + power * 0.035, 24, 16), mat(color, color, 1.8));
+  mesh.position.set(x, y, 0);
+  mesh.castShadow = true;
+  scene.add(mesh);
+  const light = new THREE.PointLight(color, 2.4, 3.8);
+  mesh.add(light);
+  const xSign = Math.abs(direction.x) > 0.22 ? Math.sign(direction.x) : owner === 'player' ? 1 : -1;
+  const yDir = clamp(-direction.y, -0.75, 0.75);
+  const speed = owner === 'player' ? 5.6 + power * 0.8 : 3.7;
+  state.projectiles.push({
+    mesh,
+    dir: { x: xSign, y: yDir * 0.44 },
+    owner,
+    speed,
+    power,
+    life: 2.45,
+    damage: owner === 'player' ? Math.round(13 * power) : 8,
+  });
+}
+
+function animateStrike(group, kind = 'punch', amount = 0.22) {
+  group.userData.punch = kind === 'punch' ? 0.24 : 0.08;
+  group.userData.kick = kind === 'kick' ? 0.30 : 0;
+  group.userData.punchAmount = amount;
+  group.userData.flash = 0.20;
+}
+
+function damageEnemy(amount, source = 'golpe') {
   if (state.gameOver) return;
-  if (now - state.lastActionAt < 260) return;
-  state.lastActionAt = now;
-  if (result.type === 'hadoken') {
-    const dir = result.direction.strength > 10 ? result.direction : { x: 1, y: 0, label: 'derecha' };
-    makeProjectile(player.position.x + 0.55, 1.25, dir, 'player');
-    punch(player, 0.18);
-    showToast('HADOKEN · ' + Math.round(result.confidence * 100) + '%');
-  } else if (result.type === 'shield') {
-    state.shieldUntil = now + 1700;
-    showToast('ESCUDO ACTIVADO');
-  } else if (result.type === 'swipe') {
-    const d = result.direction.label;
-    if (d === 'derecha') player.position.x = Math.min(1.8, player.position.x + 0.7);
-    if (d === 'izquierda') player.position.x = Math.max(-4.4, player.position.x - 0.7);
-    if (d === 'arriba') { punch(player, 0.42); damageEnemy(7); showToast('UPPERCUT'); }
-    if (d === 'abajo') { punch(player, -0.18); showToast('ESQUIVA BAJA'); }
-  } else {
-    showToast('Gesto no claro: prueba un 3 más grande');
+  state.enemyHp = Math.max(0, state.enemyHp - amount);
+  state.enemyStun = Math.max(state.enemyStun, 0.22);
+  addImpact(enemy.position.x, 1.25, 0x41f6ff, 0.34 + amount * 0.01);
+  addFloatingText(`-${amount}`, enemy.position.x, 1.95, '#97fff5');
+  logCombo(`${source} · ${amount}`);
+  if (state.enemyHp <= 0) {
+    state.gameOver = true;
+    roundState.textContent = 'Victoria';
+    showToast('¡VICTORIA! Reset para otra ronda');
   }
 }
 
-function punch(group, amount) {
-  group.userData.punch = 0.22;
-  group.userData.punchAmount = amount;
+function damagePlayer(amount, source = 'rival') {
+  if (state.gameOver) return;
+  const now = performance.now();
+  let finalAmount = amount;
+  if (now < state.shieldUntil) finalAmount = Math.ceil(amount * 0.18);
+  else if (now < state.lowGuardUntil) finalAmount = Math.ceil(amount * 0.45);
+  state.playerHp = Math.max(0, state.playerHp - finalAmount);
+  addImpact(player.position.x, 1.25, 0xff9f1c, 0.34 + finalAmount * 0.012);
+  addFloatingText(`-${finalAmount}`, player.position.x, 1.95, '#ffd18a');
+  if (finalAmount < amount) showToast('Bloqueo');
+  if (state.playerHp <= 0) {
+    state.gameOver = true;
+    roundState.textContent = 'Derrota';
+    showToast('DERROTA · Reset para reintentar');
+  } else if (source) {
+    roundState.textContent = `Rival: ${source}`;
+  }
 }
 
-function damageEnemy(amount) {
-  state.enemyHp = Math.max(0, state.enemyHp - amount);
-  state.impacts.push({ x: enemy.position.x, y: 1.25, life: 0.45, color: 0x41f6ff });
-  if (state.enemyHp <= 0) { state.gameOver = true; showToast('¡VICTORIA! Pulsa Reset'); }
+function hasMoveReady(type, now) {
+  return now >= (state.cooldowns.get(type) || 0);
 }
-function damagePlayer(amount) {
-  if (performance.now() < state.shieldUntil) amount *= 0.25;
-  state.playerHp = Math.max(0, state.playerHp - amount);
-  state.impacts.push({ x: player.position.x, y: 1.25, life: 0.45, color: 0xff9f1c });
-  if (state.playerHp <= 0) { state.gameOver = true; showToast('DERROTA · Pulsa Reset'); }
+
+function setMoveCooldown(type, now) {
+  state.cooldowns.set(type, now + (MOVE_INFO[type]?.cooldown || 250));
+}
+
+function spendEnergy(type) {
+  const cost = MOVE_INFO[type]?.cost || 0;
+  if (state.energy < cost) {
+    showToast('Sin energía');
+    return false;
+  }
+  state.energy -= cost;
+  return true;
+}
+
+function applyGesture(result) {
+  const now = performance.now();
+  window.__lastGesture = result;
+  if (state.gameOver) return;
+  if (result.type === MOVE_TYPES.UNKNOWN || result.type === MOVE_TYPES.NONE) {
+    showToast('Gesto no claro');
+    return;
+  }
+  if (!hasMoveReady(result.type, now)) {
+    showToast('Recuperando');
+    return;
+  }
+  if (!spendEnergy(result.type)) return;
+  setMoveCooldown(result.type, now);
+  state.lastActionAt = now;
+
+  const dir = signedDir(result.direction);
+  const dist = fighterDistance();
+  const charged = now < state.chargeUntil ? 1.35 : 1;
+  const name = MOVE_INFO[result.type]?.name || result.label;
+  roundState.textContent = name;
+  logCombo(`${name} · ${Math.round(result.confidence * 100)}%`);
+
+  if (result.type === MOVE_TYPES.HADOKEN) {
+    makeProjectile(player.position.x + dir * 0.62, 1.24, result.direction, 'player', charged);
+    animateStrike(player, 'punch', 0.24 * dir);
+    state.chargeUntil = 0;
+    showToast(`HADOKEN ${result.direction.label}`);
+    return;
+  }
+  if (result.type === MOVE_TYPES.DASH) {
+    player.position.x = clamp(player.position.x + dir * 0.86, -4.25, 2.15);
+    animateStrike(player, 'punch', 0.08 * dir);
+    showToast(`DASH ${result.direction.label}`);
+    return;
+  }
+  if (result.type === MOVE_TYPES.UPPERCUT) {
+    animateStrike(player, 'punch', 0.38 * (enemy.position.x > player.position.x ? 1 : -1));
+    player.position.y = 0.12;
+    if (dist < 1.65) {
+      enemy.position.y = 0.28;
+      state.enemyVy = 2.2;
+      damageEnemy(Math.round(MOVE_INFO[result.type].damage * charged), 'Uppercut');
+    } else addImpact(player.position.x + 0.55, 1.7, 0x41f6ff, 0.28);
+    return;
+  }
+  if (result.type === MOVE_TYPES.LOW_GUARD) {
+    state.lowGuardUntil = now + 1300;
+    player.scale.y = 0.86;
+    showToast('GUARDIA BAJA');
+    return;
+  }
+  if (result.type === MOVE_TYPES.JAB) {
+    animateStrike(player, 'punch', 0.30 * (enemy.position.x > player.position.x ? 1 : -1));
+    if (dist < 1.22) damageEnemy(MOVE_INFO[result.type].damage, 'Jab');
+    else addImpact(player.position.x + 0.52, 1.25, 0x41f6ff, 0.23);
+    return;
+  }
+  if (result.type === MOVE_TYPES.LAUNCHER) {
+    animateStrike(player, 'kick', 0.34);
+    if (dist < 1.70) {
+      enemy.position.y = 0.42;
+      state.enemyVy = 2.8;
+      damageEnemy(Math.round(MOVE_INFO[result.type].damage * charged), 'Launcher');
+    } else addImpact(player.position.x + 0.70, 1.55, 0x41f6ff, 0.30);
+    return;
+  }
+  if (result.type === MOVE_TYPES.SWEEP) {
+    animateStrike(player, 'kick', -0.22);
+    if (dist < 1.78) {
+      enemy.rotation.z = 0.16 * (enemy.position.x > player.position.x ? -1 : 1);
+      state.enemyStun = 0.60;
+      damageEnemy(MOVE_INFO[result.type].damage, 'Barrido');
+    } else addImpact(player.position.x + 0.75, 0.48, 0x41f6ff, 0.36);
+    return;
+  }
+  if (result.type === MOVE_TYPES.SHIELD) {
+    state.shieldUntil = now + 1750;
+    showToast('ESCUDO');
+    return;
+  }
+  if (result.type === MOVE_TYPES.FLURRY) {
+    animateStrike(player, 'punch', 0.42);
+    if (dist < 1.82) {
+      damageEnemy(6, 'Flurry 1');
+      setTimeout(() => damageEnemy(6, 'Flurry 2'), 120);
+      setTimeout(() => damageEnemy(6, 'Flurry 3'), 230);
+    } else addImpact(player.position.x + 0.65, 1.25, 0x41f6ff, 0.44);
+    return;
+  }
+  if (result.type === MOVE_TYPES.THROW) {
+    animateStrike(player, 'punch', 0.20);
+    if (dist < 1.20) {
+      enemy.position.x = clamp(enemy.position.x + (enemy.position.x > player.position.x ? 0.75 : -0.75), -0.5, 4.3);
+      enemy.position.y = 0.18;
+      damageEnemy(MOVE_INFO[result.type].damage, 'Agarre');
+    } else showToast('Muy lejos');
+    return;
+  }
+  if (result.type === MOVE_TYPES.CHARGE) {
+    state.energy = clamp(state.energy + 28, 0, 100);
+    state.chargeUntil = now + 4200;
+    addImpact(player.position.x, 1.0, 0x41f6ff, 0.50);
+    showToast('CARGA LISTA');
+  }
 }
 
 function resize() {
-  const w = window.innerWidth; const h = window.innerHeight;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h; camera.updateProjectionMatrix();
+  camera.aspect = w / h;
+  const portrait = h > w;
+  camera.position.set(0, portrait ? 4.75 : 4.25, portrait ? 10.6 : 9.1);
+  camera.lookAt(0, 1.05, 0);
+  camera.fov = portrait ? 47 : 42;
+  camera.updateProjectionMatrix();
   trailCanvas.width = Math.floor(w * window.devicePixelRatio);
   trailCanvas.height = Math.floor(h * window.devicePixelRatio);
-  trailCanvas.style.width = w + 'px'; trailCanvas.style.height = h + 'px';
+  trailCanvas.style.width = `${w}px`;
+  trailCanvas.style.height = `${h}px`;
   trailCtx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
 }
 window.addEventListener('resize', resize);
@@ -193,25 +442,37 @@ resize();
 function drawTrail() {
   trailCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
   if (!state.points.length) return;
-  trailCtx.lineCap = 'round'; trailCtx.lineJoin = 'round';
-  trailCtx.shadowColor = '#31f6ff'; trailCtx.shadowBlur = 18;
-  trailCtx.strokeStyle = 'rgba(54, 246, 255, .92)'; trailCtx.lineWidth = 7;
+  trailCtx.lineCap = 'round';
+  trailCtx.lineJoin = 'round';
+  trailCtx.shadowColor = '#31f6ff';
+  trailCtx.shadowBlur = 18;
+  trailCtx.strokeStyle = 'rgba(54, 246, 255, .94)';
+  trailCtx.lineWidth = 8;
   trailCtx.beginPath();
   state.points.forEach((p, i) => { if (i === 0) trailCtx.moveTo(p.x, p.y); else trailCtx.lineTo(p.x, p.y); });
   trailCtx.stroke();
   const last = state.points[state.points.length - 1];
+  trailCtx.shadowBlur = 0;
   trailCtx.fillStyle = '#ffffff';
-  trailCtx.beginPath(); trailCtx.arc(last.x, last.y, 7, 0, Math.PI * 2); trailCtx.fill();
+  trailCtx.beginPath();
+  trailCtx.arc(last.x, last.y, 7, 0, Math.PI * 2);
+  trailCtx.fill();
 }
 
-function pointerPoint(e) { return { x: e.clientX, y: e.clientY, t: performance.now() }; }
+function pointerPoint(e) {
+  return { x: e.clientX, y: e.clientY, t: performance.now() };
+}
+
 trailCanvas.addEventListener('pointerdown', (e) => {
   trailCanvas.setPointerCapture(e.pointerId);
-  state.drawing = true; state.points = [pointerPoint(e)];
+  state.drawing = true;
+  state.points = [pointerPoint(e)];
   gestureName.textContent = 'Leyendo gesto...';
-  gestureMeta.textContent = 'Dibuja grande y termina con dirección clara';
+  gestureMeta.textContent = 'Suelta al terminar. Mantén pulsado para cargar.';
+  liveRead.textContent = 'Dibujando';
   e.preventDefault();
 });
+
 trailCanvas.addEventListener('pointermove', (e) => {
   if (!state.drawing) return;
   const p = pointerPoint(e);
@@ -220,48 +481,63 @@ trailCanvas.addEventListener('pointermove', (e) => {
   drawTrail();
   e.preventDefault();
 });
+
 function finishPointer(e) {
   if (!state.drawing) return;
   state.drawing = false;
   const result = recognizeGesture(state.points);
   gestureName.textContent = result.label;
-  gestureMeta.textContent = `Confianza ${Math.round(result.confidence * 100)}% · dir ${result.direction.label}`;
-  debugText.textContent = JSON.stringify({ type: result.type, confidence: +result.confidence.toFixed(2), direction: result.direction, debug: result.debug }, null, 2);
-  actionFromGesture(result);
-  setTimeout(() => { state.points = []; drawTrail(); }, 180);
+  gestureMeta.textContent = `Confianza ${Math.round(result.confidence * 100)}% · dir ${result.direction.label} · energía ${Math.round(state.energy)}%`;
+  liveRead.textContent = `${result.type} ${Math.round(result.confidence * 100)}%`;
+  debugText.textContent = JSON.stringify({
+    type: result.type,
+    confidence: +result.confidence.toFixed(2),
+    direction: result.direction,
+    debug: result.debug,
+  }, null, 2);
+  applyGesture(result);
+  setTimeout(() => { state.points = []; drawTrail(); }, 160);
   e.preventDefault();
 }
 trailCanvas.addEventListener('pointerup', finishPointer);
 trailCanvas.addEventListener('pointercancel', finishPointer);
 
-let last = performance.now();
-function tick(now) {
-  const dt = Math.min(0.033, (now - last) / 1000); last = now;
-  const time = now / 1000;
-  player.position.y = Math.sin(time * 5) * 0.025;
-  enemy.position.y = Math.sin(time * 4.5 + 1) * 0.025;
-  player.lookAt(enemy.position.x, 1, 0);
-  enemy.lookAt(player.position.x, 1, 0);
-  for (const f of [player, enemy]) {
-    if (f.userData.punch > 0) {
-      f.userData.punch -= dt;
-      f.position.z = Math.sin(f.userData.punch * 30) * f.userData.punchAmount;
-    } else f.position.z *= 0.8;
+function enemyAttack() {
+  const dist = fighterDistance();
+  const close = dist < 1.35;
+  if (close && Math.random() < 0.58) {
+    animateStrike(enemy, 'punch', -0.28);
+    damagePlayer(8, 'golpe cercano');
+    return;
   }
-  player.userData.aura.material.opacity = performance.now() < state.shieldUntil ? 0.86 + Math.sin(time * 18) * 0.12 : 0;
-  player.userData.aura.rotation.z += dt * 3.5;
-
-  if (!state.gameOver) {
-    state.enemyCooldown -= dt;
-    enemy.position.x += Math.sin(time * 0.9) * dt * 0.22;
-    enemy.position.x = Math.max(1.8, Math.min(4.0, enemy.position.x));
-    if (state.enemyCooldown <= 0) {
-      state.enemyCooldown = 1.8 + Math.random() * 1.4;
-      makeProjectile(enemy.position.x - 0.55, 1.18, { x: -1, y: 0 }, 'enemy');
-      punch(enemy, -0.14);
-    }
+  if (close && Math.random() < 0.35) {
+    animateStrike(enemy, 'kick', -0.2);
+    damagePlayer(10, 'barrido');
+    return;
   }
+  makeProjectile(enemy.position.x - 0.55, 1.18, { x: -1, y: Math.random() < 0.35 ? -0.35 : 0 }, 'enemy');
+  animateStrike(enemy, 'punch', -0.16);
+}
 
+function updateEnemy(dt, time) {
+  if (state.enemyStun > 0) {
+    state.enemyStun -= dt;
+    enemy.rotation.z *= 0.94;
+    return;
+  }
+  const desired = 2.3 + Math.sin(time * 0.7) * 0.38;
+  const gap = enemy.position.x - player.position.x;
+  if (gap > desired) enemy.position.x -= dt * 0.42;
+  if (gap < 1.0) enemy.position.x += dt * 0.46;
+  enemy.position.x = clamp(enemy.position.x, 0.8, 4.25);
+  state.enemyCooldown -= dt;
+  if (state.enemyCooldown <= 0) {
+    state.enemyCooldown = 1.15 + Math.random() * 1.20;
+    enemyAttack();
+  }
+}
+
+function updateProjectiles(dt, time) {
   for (let i = state.projectiles.length - 1; i >= 0; i--) {
     const p = state.projectiles[i];
     p.life -= dt;
@@ -269,27 +545,113 @@ function tick(now) {
     p.mesh.position.y += p.dir.y * p.speed * dt;
     p.mesh.scale.setScalar(1 + Math.sin(time * 20) * 0.12);
     const target = p.owner === 'player' ? enemy : player;
-    if (Math.abs(p.mesh.position.x - target.position.x) < 0.48 && Math.abs(p.mesh.position.y - 1.15) < 0.7) {
-      if (p.owner === 'player') damageEnemy(13); else damagePlayer(8);
-      scene.remove(p.mesh); state.projectiles.splice(i, 1); continue;
+    if (Math.abs(p.mesh.position.x - target.position.x) < 0.50 && Math.abs(p.mesh.position.y - (target.position.y + 1.15)) < 0.74) {
+      if (p.owner === 'player') damageEnemy(p.damage, 'Hadoken');
+      else damagePlayer(p.damage, 'proyectil');
+      scene.remove(p.mesh);
+      state.projectiles.splice(i, 1);
+      continue;
     }
-    if (p.life <= 0 || Math.abs(p.mesh.position.x) > 7 || p.mesh.position.y < 0.3 || p.mesh.position.y > 3.2) {
-      scene.remove(p.mesh); state.projectiles.splice(i, 1);
+    if (p.life <= 0 || Math.abs(p.mesh.position.x) > 7 || p.mesh.position.y < 0.2 || p.mesh.position.y > 3.4) {
+      scene.remove(p.mesh);
+      state.projectiles.splice(i, 1);
     }
   }
+}
+
+function updateImpacts(dt) {
   for (let i = state.impacts.length - 1; i >= 0; i--) {
-    const im = state.impacts[i]; im.life -= dt;
+    const im = state.impacts[i];
+    im.life -= dt;
     if (!im.mesh) {
-      im.mesh = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.025, 8, 48), mat(im.color, im.color, 1.2));
-      im.mesh.position.set(im.x, im.y, 0.05); scene.add(im.mesh);
+      im.mesh = new THREE.Mesh(new THREE.TorusGeometry(im.size, 0.025, 8, 48), mat(im.color, im.color, 1.2));
+      im.mesh.position.set(im.x, im.y, 0.05);
+      im.mesh.material.transparent = true;
+      scene.add(im.mesh);
     }
     im.mesh.scale.setScalar(1 + (0.45 - im.life) * 3.2);
-    im.mesh.material.opacity = Math.max(0, im.life * 2.2); im.mesh.material.transparent = true;
-    if (im.life <= 0) { scene.remove(im.mesh); state.impacts.splice(i, 1); }
+    im.mesh.material.opacity = Math.max(0, im.life * 2.2);
+    if (im.life <= 0) {
+      scene.remove(im.mesh);
+      state.impacts.splice(i, 1);
+    }
   }
+}
 
-  hpPlayerEl.style.width = state.playerHp + '%';
-  hpEnemyEl.style.width = state.enemyHp + '%';
+function updateFloaters(dt) {
+  for (let i = state.floaters.length - 1; i >= 0; i--) {
+    const fl = state.floaters[i];
+    fl.life -= dt;
+    if (!fl.el) {
+      fl.el = document.createElement('div');
+      fl.el.className = 'floatingHit';
+      fl.el.textContent = fl.text;
+      fl.el.style.color = fl.color;
+      document.body.appendChild(fl.el);
+    }
+    fl.y += dt * 0.72;
+    const screen = new THREE.Vector3(fl.x, fl.y, 0).project(camera);
+    fl.el.style.left = `${(screen.x * 0.5 + 0.5) * window.innerWidth}px`;
+    fl.el.style.top = `${(-screen.y * 0.5 + 0.5) * window.innerHeight}px`;
+    fl.el.style.opacity = Math.max(0, fl.life / 0.85);
+    if (fl.life <= 0) {
+      fl.el.remove();
+      state.floaters.splice(i, 1);
+    }
+  }
+}
+
+function updateFighterAnimation(dt, time) {
+  player.position.y += (0 - player.position.y) * 0.08;
+  enemy.position.y += state.enemyVy * dt;
+  if (enemy.position.y > 0) state.enemyVy -= 6.2 * dt;
+  if (enemy.position.y <= 0) {
+    enemy.position.y = 0;
+    state.enemyVy = Math.max(0, state.enemyVy);
+  }
+  for (const f of [player, enemy]) {
+    f.lookAt(f === player ? enemy.position.x : player.position.x, 1, 0);
+    f.position.y += Math.sin(time * (f === player ? 5 : 4.5)) * 0.002;
+    if (f.userData.punch > 0) {
+      f.userData.punch -= dt;
+      f.position.z = Math.sin(f.userData.punch * 30) * f.userData.punchAmount;
+      f.userData.rightArm.rotation.x = -1.0 * f.userData.side;
+    } else {
+      f.position.z *= 0.82;
+      f.userData.rightArm.rotation.x *= 0.82;
+    }
+    if (f.userData.kick > 0) {
+      f.userData.kick -= dt;
+      f.userData.rightLeg.rotation.x = -1.4;
+      f.userData.rightLeg.position.z = Math.sin(f.userData.kick * 24) * 0.32;
+    } else {
+      f.userData.rightLeg.rotation.x *= 0.84;
+      f.userData.rightLeg.position.z *= 0.84;
+    }
+  }
+  player.scale.y += ((performance.now() < state.lowGuardUntil ? 0.86 : 1) - player.scale.y) * 0.14;
+  player.userData.aura.material.opacity = performance.now() < state.shieldUntil ? 0.82 + Math.sin(time * 18) * 0.12 : performance.now() < state.chargeUntil ? 0.42 : 0;
+  player.userData.aura.rotation.z += dt * 3.5;
+}
+
+let last = performance.now();
+function tick(now) {
+  const dt = Math.min(0.033, (now - last) / 1000);
+  last = now;
+  const time = now / 1000;
+
+  if (!state.gameOver) {
+    state.energy = clamp(state.energy + dt * 8.5, 0, 100);
+    updateEnemy(dt, time);
+  }
+  updateFighterAnimation(dt, time);
+  updateProjectiles(dt, time);
+  updateImpacts(dt);
+  updateFloaters(dt);
+
+  hpPlayerEl.style.width = `${state.playerHp}%`;
+  hpEnemyEl.style.width = `${state.enemyHp}%`;
+  energyPlayerEl.style.width = `${state.energy}%`;
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
