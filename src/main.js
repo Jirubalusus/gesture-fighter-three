@@ -33,17 +33,15 @@ const MOVE_INFO = {
 };
 
 const GUIDE = [
-  ['3→', 'Hadoken', 'M 16 14 C 52 2 56 38 24 38 C 60 38 62 78 18 70 L 76 70'],
-  ['—', 'Dash', 'M 12 45 L 74 45'],
-  ['↑', 'Uppercut', 'M 42 74 L 42 16'],
-  ['↓', 'Guardia baja', 'M 42 16 L 42 74'],
-  ['·', 'Jab', 'M 18 45 L 48 43'],
-  ['V', 'Launcher', 'M 16 16 L 42 72 L 74 18'],
-  ['Z', 'Barrido', 'M 14 18 L 74 18 L 18 72 L 76 72'],
+  ['tap', 'Mover / parar', 'M 16 44 L 74 44'],
+  ['hold', 'Bloquear', 'M 44 44 m -20 0 a 20 20 0 1 0 40 0 a 20 20 0 1 0 -40 0'],
+  ['línea', 'Dash corto', 'M 18 48 L 58 42'],
+  ['3→', 'Combo 3 Hadoken', 'M 16 14 C 52 2 56 38 24 38 C 60 38 62 78 18 70 L 76 70'],
+  ['V', 'Combo Launcher', 'M 16 16 L 42 72 L 74 18'],
+  ['Z', 'Combo Barrido', 'M 14 18 L 74 18 L 18 72 L 76 72'],
   ['O', 'Escudo', 'M 44 14 C 82 14 82 76 44 76 C 6 76 6 14 44 14'],
   ['W', 'Flurry', 'M 10 16 L 26 72 L 42 20 L 58 72 L 76 16'],
-  ['L', 'Agarre', 'M 22 14 L 22 72 L 72 72'],
-  ['hold', 'Carga', 'M 44 44 m -20 0 a 20 20 0 1 0 40 0 a 20 20 0 1 0 -40 0'],
+  ['L', 'Combo Agarre', 'M 22 14 L 22 72 L 72 72'],
 ];
 
 const state = {
@@ -62,6 +60,11 @@ const state = {
   shieldUntil: 0,
   lowGuardUntil: 0,
   chargeUntil: 0,
+  blockUntil: 0,
+  holdTimer: null,
+  holdStarted: false,
+  playerVelocity: 0,
+  moveIntent: 0,
   enemyCooldown: 1.0,
   enemyStun: 0,
   enemyVy: 0,
@@ -212,6 +215,10 @@ function resetGame() {
   state.shieldUntil = 0;
   state.lowGuardUntil = 0;
   state.chargeUntil = 0;
+  state.blockUntil = 0;
+  state.holdStarted = false;
+  state.playerVelocity = 0;
+  state.moveIntent = 0;
   state.enemyCooldown = 1.0;
   state.enemyStun = 0;
   state.enemyVy = 0;
@@ -227,8 +234,8 @@ function resetGame() {
   player.position.set(state.playerBaseX, 0, 0);
   enemy.position.set(state.enemyBaseX, 0, 0);
   gestureName.textContent = 'Dibuja un gesto';
-  gestureMeta.textContent = '3 + flick = Hadoken · V = launcher · Z = barrido · W = combo';
-  roundState.textContent = 'Solo gestos · toca y dibuja';
+  gestureMeta.textContent = 'Tap lateral mueve · tap contrario para · línea corta dash · mantener bloquea · dibuja combos';
+  roundState.textContent = 'Combos por gestos · movimiento por taps';
   showToast('Combate reiniciado');
 }
 resetBtn.addEventListener('click', resetGame);
@@ -280,7 +287,7 @@ function damagePlayer(amount, source = 'rival') {
   if (state.gameOver) return;
   const now = performance.now();
   let finalAmount = amount;
-  if (now < state.shieldUntil) finalAmount = Math.ceil(amount * 0.18);
+  if (now < state.shieldUntil || now < state.blockUntil) finalAmount = Math.ceil(amount * 0.18);
   else if (now < state.lowGuardUntil) finalAmount = Math.ceil(amount * 0.45);
   state.playerHp = Math.max(0, state.playerHp - finalAmount);
   addImpact(player.position.x, 1.25, 0xff9f1c, 0.34 + finalAmount * 0.012);
@@ -463,13 +470,107 @@ function pointerPoint(e) {
   return { x: e.clientX, y: e.clientY, t: performance.now() };
 }
 
+function inputStats(points) {
+  if (!points.length) return { travel: 0, displacement: 0, duration: 0, direction: { x: 1, y: 0, label: 'derecha', strength: 0 } };
+  let travel = 0;
+  for (let i = 1; i < points.length; i++) travel += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  const first = points[0];
+  const lastPoint = points[points.length - 1];
+  const dx = lastPoint.x - first.x;
+  const dy = lastPoint.y - first.y;
+  const displacement = Math.hypot(dx, dy);
+  const mag = displacement || 1;
+  const direction = {
+    x: dx / mag,
+    y: dy / mag,
+    label: Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'derecha' : 'izquierda') : (dy >= 0 ? 'abajo' : 'arriba'),
+    strength: displacement,
+  };
+  return { travel, displacement, duration: Math.max(1, lastPoint.t - first.t), direction, first, last: lastPoint };
+}
+
+function interpretPointerInput(points) {
+  const stats = inputStats(points);
+  if (state.holdStarted || (stats.duration > 330 && stats.displacement < 26 && stats.travel < 56)) {
+    return { kind: 'hold', ...stats };
+  }
+  if (stats.duration < 260 && stats.displacement < 18 && stats.travel < 36) {
+    return { kind: 'tap', ...stats };
+  }
+  const straightness = stats.displacement / Math.max(1, stats.travel);
+  if (stats.displacement >= 24 && stats.displacement <= 96 && stats.travel <= 120 && straightness > 0.72 && stats.duration < 420) {
+    return { kind: 'short-line', straightness, ...stats };
+  }
+  return { kind: 'combo', straightness, ...stats };
+}
+
+function sideFromScreenX(x) {
+  const playerScreen = player.position.clone().project(camera);
+  const playerX = (playerScreen.x * 0.5 + 0.5) * window.innerWidth;
+  if (Math.abs(x - playerX) < 18) return enemy.position.x >= player.position.x ? 1 : -1;
+  return x >= playerX ? 1 : -1;
+}
+
+function handleTapMove(input) {
+  const screenDir = input.first.x >= window.innerWidth * 0.5 ? 1 : -1;
+  const dir = state.moveIntent ? screenDir : sideFromScreenX(input.first.x);
+  if (state.moveIntent && dir === -state.moveIntent) {
+    state.moveIntent = 0;
+    state.playerVelocity = 0;
+    gestureName.textContent = 'Parar';
+    gestureMeta.textContent = 'Tap contrario: el luchador se planta';
+    liveRead.textContent = 'stop';
+    roundState.textContent = 'Parado';
+    showToast('PARAR');
+    return;
+  }
+  state.moveIntent = dir;
+  gestureName.textContent = dir > 0 ? 'Mover adelante' : 'Mover atrás';
+  gestureMeta.textContent = 'Tap lateral: movimiento continuo. Tap contrario: parar.';
+  liveRead.textContent = dir > 0 ? 'move-right' : 'move-left';
+  roundState.textContent = dir > 0 ? 'Avanza' : 'Retrocede';
+}
+
+function applyManualDash(direction) {
+  const dir = Math.abs(direction.x) >= Math.abs(direction.y) ? Math.sign(direction.x || 1) : sideFromScreenX(state.points[0]?.x ?? window.innerWidth * 0.5);
+  player.position.x = clamp(player.position.x + dir * 0.86, -4.25, Math.min(2.15, enemy.position.x - 0.75));
+  state.playerVelocity = 0;
+  state.moveIntent = 0;
+  animateStrike(player, 'punch', 0.08 * dir);
+  gestureName.textContent = dir > 0 ? 'Dash adelante' : 'Dash atrás';
+  gestureMeta.textContent = 'Línea corta: dash rápido, separada de los combos grandes';
+  liveRead.textContent = 'dash-short';
+  debugText.textContent = JSON.stringify({ kind: 'short-line', direction }, null, 2);
+  showToast(dir > 0 ? 'DASH ADELANTE' : 'DASH ATRÁS');
+}
+
+function updatePlayerMovement(dt) {
+  const target = state.moveIntent * 1.25;
+  state.playerVelocity += (target - state.playerVelocity) * Math.min(1, dt * 8);
+  player.position.x = clamp(player.position.x + state.playerVelocity * dt, -4.35, Math.min(2.1, enemy.position.x - 0.70));
+  if (Math.abs(state.playerVelocity) < 0.01 && !state.moveIntent) state.playerVelocity = 0;
+}
+
+window.__gestureFighterDebug = { state, interpretPointerInput };
+
 trailCanvas.addEventListener('pointerdown', (e) => {
   trailCanvas.setPointerCapture(e.pointerId);
   state.drawing = true;
   state.points = [pointerPoint(e)];
-  gestureName.textContent = 'Leyendo gesto...';
-  gestureMeta.textContent = 'Suelta al terminar. Mantén pulsado para cargar.';
-  liveRead.textContent = 'Dibujando';
+  state.holdStarted = false;
+  clearTimeout(state.holdTimer);
+  state.holdTimer = setTimeout(() => {
+    if (!state.drawing || state.points.length !== 1 || state.gameOver) return;
+    state.holdStarted = true;
+    state.blockUntil = performance.now() + 260;
+    gestureName.textContent = 'Bloqueo activo';
+    gestureMeta.textContent = 'Mantén para cubrirte. Suelta para volver al combate.';
+    liveRead.textContent = 'bloqueo';
+    showToast('BLOQUEO');
+  }, 330);
+  gestureName.textContent = 'Leyendo input...';
+  gestureMeta.textContent = 'Tap mueve/para · línea corta dash · mantener bloquea · dibujo largo combo.';
+  liveRead.textContent = 'Input';
   e.preventDefault();
 });
 
@@ -485,6 +586,30 @@ trailCanvas.addEventListener('pointermove', (e) => {
 function finishPointer(e) {
   if (!state.drawing) return;
   state.drawing = false;
+  clearTimeout(state.holdTimer);
+  const input = interpretPointerInput(state.points);
+  if (input.kind === 'tap') {
+    handleTapMove(input);
+    setTimeout(() => { state.points = []; drawTrail(); }, 90);
+    e.preventDefault();
+    return;
+  }
+  if (input.kind === 'hold') {
+    state.blockUntil = performance.now() + 280;
+    gestureName.textContent = 'Bloqueo';
+    gestureMeta.textContent = 'Guardia mantenida · reduce mucho el daño';
+    liveRead.textContent = 'block';
+    debugText.textContent = JSON.stringify(input, null, 2);
+    setTimeout(() => { state.points = []; drawTrail(); }, 90);
+    e.preventDefault();
+    return;
+  }
+  if (input.kind === 'short-line') {
+    applyManualDash(input.direction);
+    setTimeout(() => { state.points = []; drawTrail(); }, 120);
+    e.preventDefault();
+    return;
+  }
   const result = recognizeGesture(state.points);
   gestureName.textContent = result.label;
   gestureMeta.textContent = `Confianza ${Math.round(result.confidence * 100)}% · dir ${result.direction.label} · energía ${Math.round(state.energy)}%`;
@@ -493,7 +618,8 @@ function finishPointer(e) {
     type: result.type,
     confidence: +result.confidence.toFixed(2),
     direction: result.direction,
-    debug: result.debug,
+    ambiguity: result.debug?.ambiguity,
+    three: result.debug?.three,
   }, null, 2);
   applyGesture(result);
   setTimeout(() => { state.points = []; drawTrail(); }, 160);
@@ -629,8 +755,10 @@ function updateFighterAnimation(dt, time) {
       f.userData.rightLeg.position.z *= 0.84;
     }
   }
-  player.scale.y += ((performance.now() < state.lowGuardUntil ? 0.86 : 1) - player.scale.y) * 0.14;
-  player.userData.aura.material.opacity = performance.now() < state.shieldUntil ? 0.82 + Math.sin(time * 18) * 0.12 : performance.now() < state.chargeUntil ? 0.42 : 0;
+  const now = performance.now();
+  const blocking = now < state.blockUntil;
+  player.scale.y += ((performance.now() < state.lowGuardUntil || blocking ? 0.86 : 1) - player.scale.y) * 0.14;
+  player.userData.aura.material.opacity = now < state.shieldUntil || blocking ? 0.82 + Math.sin(time * 18) * 0.12 : now < state.chargeUntil ? 0.42 : 0;
   player.userData.aura.rotation.z += dt * 3.5;
 }
 
@@ -642,6 +770,7 @@ function tick(now) {
 
   if (!state.gameOver) {
     state.energy = clamp(state.energy + dt * 8.5, 0, 100);
+    updatePlayerMovement(dt);
     updateEnemy(dt, time);
   }
   updateFighterAnimation(dt, time);

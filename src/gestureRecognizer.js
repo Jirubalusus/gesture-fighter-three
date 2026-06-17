@@ -104,7 +104,42 @@ function make3Template(variant = 0) {
   return normalize(resample(pts, 64));
 }
 
-const templates3 = [make3Template(-1), make3Template(0), make3Template(1)];
+function make3Variant({ widthTop = 1, widthBottom = 1, heightTop = 1, heightBottom = 1, waist = 0, angular = 0, open = 0 } = {}) {
+  const pts = [];
+  const topSteps = angular ? 7 : 30;
+  const bottomSteps = angular ? 8 : 35;
+  for (let i = 0; i < topSteps; i++) {
+    const k = i / (topSteps - 1);
+    const a = -Math.PI * (0.82 - open * 0.06) + Math.PI * (1.52 + open * 0.10) * k;
+    const wobble = angular ? (Math.round(k * 4) / 4 - k) * 0.10 : 0;
+    pts.push({
+      x: 0.50 + Math.cos(a) * 0.31 * widthTop + waist * k + wobble,
+      y: 0.30 + Math.sin(a) * 0.23 * heightTop,
+      t: i,
+    });
+  }
+  for (let i = 0; i < bottomSteps; i++) {
+    const k = i / (bottomSteps - 1);
+    const a = -Math.PI * (0.66 + open * 0.03) + Math.PI * (1.57 + open * 0.08) * k;
+    const wobble = angular ? (Math.round(k * 4) / 4 - k) * -0.11 : 0;
+    pts.push({
+      x: 0.47 + Math.cos(a) * 0.35 * widthBottom - waist * (1 - k) + wobble,
+      y: 0.71 + Math.sin(a) * 0.27 * heightBottom,
+      t: i + topSteps,
+    });
+  }
+  return normalize(resample(pts, 64));
+}
+
+const templates3 = [
+  make3Template(-1), make3Template(0), make3Template(1),
+  make3Variant({ widthTop: 0.80, widthBottom: 0.95, heightTop: 1.15, heightBottom: 1.05, open: 0.35 }),
+  make3Variant({ widthTop: 1.20, widthBottom: 1.08, heightTop: 0.88, heightBottom: 0.92, waist: 0.03 }),
+  make3Variant({ widthTop: 0.95, widthBottom: 1.22, heightTop: 0.95, heightBottom: 1.20, open: -0.25 }),
+  make3Variant({ widthTop: 1.10, widthBottom: 0.82, heightTop: 1.08, heightBottom: 0.90, waist: -0.025 }),
+  make3Variant({ widthTop: 0.88, widthBottom: 1.15, heightTop: 1.22, heightBottom: 0.84, angular: 1, open: 0.2 }),
+  make3Variant({ widthTop: 1.18, widthBottom: 0.92, heightTop: 0.84, heightBottom: 1.18, angular: 1, open: -0.1 }),
+];
 
 function templateDistance(a, b) {
   const n = Math.min(a.length, b.length);
@@ -204,7 +239,8 @@ function detectThree(raw) {
   const sampled = resample(split.shape, 64);
   const norm = normalize(sampled);
   const b = bounds(norm);
-  const d = Math.min(...templates3.map((tpl) => templateDistance(norm, tpl)));
+  const templateScores = templates3.map((tpl, index) => ({ index, distance: templateDistance(norm, tpl) })).sort((a, b) => a.distance - b.distance);
+  const d = templateScores[0].distance;
   const xs = norm.map((p) => p.x);
   const ys = norm.map((p) => p.y);
   const xTurns = countReversals(xs, 0.035);
@@ -234,7 +270,7 @@ function detectThree(raw) {
     (split.hasFlick ? 0.12 : 0)
   );
   const confidence = clamp01(Math.max(templateScore * 0.72, structuralScore));
-  return { ok: structural && split.hasFlick && confidence > 0.46, confidence, direction: split.flick, distance: d, xTurns, yTurns, structural, topRight, bottomRight, waist, hasFlick: split.hasFlick, flick: split.flick, bounds: b };
+  return { ok: structural && split.hasFlick && confidence > 0.46, confidence, direction: split.flick, distance: d, bestTemplate: templateScores[0].index, secondTemplateDistance: templateScores[1]?.distance ?? d, xTurns, yTurns, structural, topRight, bottomRight, waist, hasFlick: split.hasFlick, flick: split.flick, bounds: b };
 }
 
 function detectVOrCheck(norm) {
@@ -341,8 +377,22 @@ export function recognizeGesture(points) {
   if (duration > 520 && b.diag < 42 && travel < 95) {
     return result(MOVE_TYPES.CHARGE, 'Carga de energía', Math.min(0.94, duration / 1100), direction, baseDebug);
   }
-  if (three.ok && three.confidence >= Math.max(circle.confidence * 0.82, 0.46)) {
-    return result(MOVE_TYPES.HADOKEN, `Hadoken hacia ${three.direction.label}`, three.confidence, three.direction, baseDebug);
+  const shapeCandidates = [
+    { family: 'circle', confidence: circle.ok ? circle.confidence : 0 },
+    { family: 'w', confidence: w.ok ? w.confidence : 0 },
+    { family: 'z', confidence: z.ok ? z.confidence : 0 },
+    { family: 'v', confidence: v.ok ? v.confidence : 0 },
+    { family: 'l', confidence: l.ok ? l.confidence : 0 },
+  ].sort((a, b) => b.confidence - a.confidence);
+  const nearestOther = shapeCandidates[0];
+  const threeIsAmbiguous = three.confidence < 0.78 && nearestOther.confidence > 0.58 && three.confidence - nearestOther.confidence < 0.16;
+  baseDebug.ambiguity = { nearestOther, threeIsAmbiguous };
+
+  if (three.ok && !threeIsAmbiguous && three.confidence >= Math.max(circle.confidence * 0.92, 0.46)) {
+    return result(MOVE_TYPES.HADOKEN, `Combo 3: Hadoken hacia ${three.direction.label}`, three.confidence, three.direction, baseDebug);
+  }
+  if (three.ok && threeIsAmbiguous) {
+    return result(MOVE_TYPES.UNKNOWN, `Gesto ambiguo: 3 / ${nearestOther.family}`, three.confidence, direction, baseDebug);
   }
   if (circle.ok && circle.confidence > 0.50) {
     return result(MOVE_TYPES.SHIELD, 'Escudo circular', circle.confidence, direction, baseDebug);
